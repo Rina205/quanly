@@ -1,8 +1,15 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../models/app_user.dart';
+import '../services/local_prefs.dart';
 import '../services/user_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/change_password_dialog.dart';
 import '../widgets/user_avatar.dart';
 import 'login_screen.dart';
 import 'user_form_screen.dart';
@@ -17,7 +24,12 @@ class UserListScreen extends StatefulWidget {
 
 class _UserListScreenState extends State<UserListScreen> {
   final _service = UserService();
+  // Giữ 1 stream duy nhất để setState (tick chọn) không tạo lại kết nối Firestore
+  late final Stream<List<AppUser>> _usersStream = _service.watchUsers();
   String _keyword = '';
+  bool _selectMode = false;
+  final Set<String> _selected = {};
+  List<AppUser> _visibleUsers = [];
 
   bool get _isAdmin => widget.currentUser.isAdmin;
 
@@ -64,6 +76,66 @@ class _UserListScreenState extends State<UserListScreen> {
     }
   }
 
+  Future<void> _changeAvatar(ImageSource source) async {
+    // Thu nhỏ ảnh để chuỗi base64 không vượt giới hạn 1MB/document của Firestore
+    final file = await ImagePicker().pickImage(
+      source: source,
+      maxWidth: 400,
+      maxHeight: 400,
+      imageQuality: 70,
+    );
+    if (file == null) return;
+    try {
+      final bytes = await file.readAsBytes();
+      await _service.updateOwnAvatar(
+          widget.currentUser.id, base64Encode(bytes));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Đã cập nhật ảnh đại diện')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không thể cập nhật ảnh: $e')),
+        );
+      }
+    }
+  }
+
+  /// Bảng chọn nguồn ảnh khi bấm vào icon bút trên avatar.
+  void _pickAvatarSource() {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Chọn ảnh từ thư viện'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _changeAvatar(ImageSource.gallery);
+              },
+            ),
+            if (!kIsWeb)
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('Chụp ảnh'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _changeAvatar(ImageSource.camera);
+                },
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showDetail(AppUser u) {
     showDialog(
       context: context,
@@ -71,10 +143,59 @@ class _UserListScreenState extends State<UserListScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            UserAvatar(base64Image: u.hinhanh, name: u.hoten, radius: 60),
+            u.id == widget.currentUser.id
+                ? Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      UserAvatar(
+                          base64Image: u.hinhanh, name: u.hoten, radius: 60),
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: Material(
+                          color: Theme.of(context).colorScheme.primary,
+                          shape: CircleBorder(
+                            side: BorderSide(
+                                color: AppColors.of(context).card, width: 3),
+                          ),
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: () {
+                              Navigator.pop(context);
+                              _pickAvatarSource();
+                            },
+                            child: const Padding(
+                              padding: EdgeInsets.all(8),
+                              child: Icon(Icons.edit_rounded,
+                                  size: 20, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  )
+                : UserAvatar(base64Image: u.hinhanh, name: u.hoten, radius: 60),
             const SizedBox(height: 16),
             Text(u.hoten, style: Theme.of(context).textTheme.titleLarge),
             Text(u.email),
+            if (u.id == widget.currentUser.id) ...[
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+                icon: const Icon(Icons.lock_reset_rounded),
+                label: const Text('Đổi mật khẩu'),
+                onPressed: () async {
+                  Navigator.pop(context);
+                  final ok = await showChangePasswordDialog(
+                      context, widget.currentUser);
+                  if (ok == true && mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Đã đổi mật khẩu')),
+                    );
+                  }
+                },
+              ),
+            ],
           ],
         ),
         actions: [
@@ -115,216 +236,348 @@ class _UserListScreenState extends State<UserListScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'Người dùng',
-          style: TextStyle(fontWeight: FontWeight.w700),
-        ),
+  /// Bấm vào 1 dòng ở chế độ chọn nhiều: tick / bỏ tick.
+  void _toggleSelect(AppUser u) {
+    setState(() {
+      if (!_selected.remove(u.id)) _selected.add(u.id);
+    });
+  }
+
+  void _enterSelectMode([AppUser? first]) {
+    if (!_isAdmin) return;
+    setState(() {
+      _selectMode = true;
+      if (first != null) _selected.add(first.id);
+    });
+  }
+
+  void _exitSelectMode() => setState(() {
+        _selectMode = false;
+        _selected.clear();
+      });
+
+  Future<void> _deleteSelected() async {
+    if (_selected.isEmpty) return;
+    final n = _selected.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Xóa $n người dùng?'),
+        content: const Text(
+            'Các người dùng đã chọn sẽ bị xóa khỏi cơ sở dữ liệu. '
+            'Không thể hoàn tác.'),
         actions: [
-          IconButton(
-            tooltip: 'Xuất JSON',
-            icon: const Icon(Icons.file_download_outlined),
-            onPressed: _exportJson,
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Hủy'),
           ),
-          IconButton(
-            tooltip: 'Đăng xuất',
-            icon: const Icon(Icons.logout_rounded),
-            onPressed: () => Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (_) => const LoginScreen()),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(0, 44),
+              backgroundColor: Theme.of(context).colorScheme.error,
             ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Xóa'),
           ),
         ],
       ),
-      floatingActionButton: _isAdmin
-          ? FloatingActionButton.extended(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) =>
-                      UserFormScreen(currentUser: widget.currentUser),
+    );
+    if (ok != true) return;
+    try {
+      final deleted = await _service.deleteUsers(
+        _selected.toList(),
+        actorEmail: widget.currentUser.email,
+      );
+      if (!mounted) return;
+      _exitSelectMode();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Đã xóa $deleted người dùng')),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không thể xóa: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _logout() async {
+    await LocalPrefs.clearRememberedUser(); // bỏ ghi nhớ đăng nhập
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar() {
+    if (_selectMode) {
+      final allSelected = _visibleUsers.isNotEmpty &&
+          _visibleUsers.every((u) => _selected.contains(u.id));
+      return AppBar(
+        leading: IconButton(
+          tooltip: 'Thoát chọn',
+          icon: const Icon(Icons.close_rounded),
+          onPressed: _exitSelectMode,
+        ),
+        title: Text(
+          'Đã chọn ${_selected.length}',
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        actions: [
+          IconButton(
+            tooltip: allSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả',
+            icon: Icon(allSelected
+                ? Icons.deselect_rounded
+                : Icons.select_all_rounded),
+            onPressed: () => setState(() {
+              if (allSelected) {
+                _selected.clear();
+              } else {
+                _selected.addAll(_visibleUsers.map((u) => u.id));
+              }
+            }),
+          ),
+          IconButton(
+            tooltip: 'Xóa đã chọn',
+            color: Theme.of(context).colorScheme.error,
+            icon: const Icon(Icons.delete_outline),
+            onPressed: _selected.isEmpty ? null : _deleteSelected,
+          ),
+        ],
+      );
+    }
+    return AppBar(
+      title: const Text(
+        'Người dùng',
+        style: TextStyle(fontWeight: FontWeight.w700),
+      ),
+      actions: [
+        if (_isAdmin)
+          IconButton(
+            tooltip: 'Chọn nhiều để xóa',
+            icon: const Icon(Icons.checklist_rounded),
+            onPressed: () => _enterSelectMode(),
+          ),
+        const ThemeToggleButton(),
+        IconButton(
+          tooltip: 'Xuất JSON',
+          icon: const Icon(Icons.file_download_outlined),
+          onPressed: _exportJson,
+        ),
+        IconButton(
+          tooltip: 'Đăng xuất',
+          icon: const Icon(Icons.logout_rounded),
+          onPressed: _logout,
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final c = AppColors.of(context);
+    return PopScope(
+      // Đang chọn nhiều mà bấm Back thì chỉ thoát chế độ chọn
+      canPop: !_selectMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selectMode) _exitSelectMode();
+      },
+      child: Scaffold(
+        appBar: _buildAppBar(),
+        floatingActionButton: _isAdmin && !_selectMode
+            ? FloatingActionButton.extended(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        UserFormScreen(currentUser: widget.currentUser),
+                  ),
                 ),
-              ),
-              icon: const Icon(Icons.person_add),
-              label: const Text('Thêm'),
-            )
-          : null,
-      body: StreamBuilder<List<AppUser>>(
-        stream: _service.watchUsers(),
-        builder: (context, snap) {
-          if (snap.hasError) {
-            return Center(child: Text('Lỗi: ${snap.error}'));
-          }
-          if (!snap.hasData) {
-            return Center(
-              child: CircularProgressIndicator(
-                color: theme.colorScheme.primary,
-              ),
-            );
-          }
-
-          final allUsers = snap.data!;
-          final admins = allUsers.where((u) => u.isAdmin);
-          final admin = admins.isEmpty ? null : admins.first;
-          final users = allUsers
-              .where(
-                (u) =>
-                    !u.isAdmin &&
-                    (u.hoten.toLowerCase().contains(_keyword) ||
-                        u.email.toLowerCase().contains(_keyword)),
+                icon: const Icon(Icons.person_add),
+                label: const Text('Thêm'),
               )
-              .toList();
+            : null,
+        body: StreamBuilder<List<AppUser>>(
+          stream: _usersStream,
+          builder: (context, snap) {
+            if (snap.hasError) {
+              return Center(child: Text('Lỗi: ${snap.error}'));
+            }
+            if (!snap.hasData) {
+              return Center(
+                child: CircularProgressIndicator(
+                  color: theme.colorScheme.primary,
+                ),
+              );
+            }
 
-          return Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Quản lý tài khoản của bạn',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: const Color(0xFF78829A),
+            final allUsers = snap.data!;
+            final admins = allUsers.where((u) => u.isAdmin);
+            final admin = admins.isEmpty ? null : admins.first;
+            final users = allUsers
+                .where(
+                  (u) =>
+                      !u.isAdmin &&
+                      (u.hoten.toLowerCase().contains(_keyword) ||
+                          u.email.toLowerCase().contains(_keyword)),
+                )
+                .toList();
+            _visibleUsers = users;
+            // Người đã bị xóa (ở máy khác) thì bỏ khỏi danh sách đang chọn
+            _selected.removeWhere((id) => !allUsers.any((u) => u.id == id));
+
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _selectMode
+                            ? 'Chạm vào từng dòng để chọn người cần xóa'
+                            : 'Quản lý tài khoản của bạn',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: c.muted,
+                        ),
                       ),
-                    ),
-                    if (admin != null) ...[
-                      const SizedBox(height: 14),
-                      Card(
-                        margin: EdgeInsets.zero,
-                        elevation: 0,
-                        color: const Color(0xFFEEF1FF),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(18),
-                          side: const BorderSide(color: Color(0xFFDCE3FF)),
+                      if (admin != null && !_selectMode) ...[
+                        const SizedBox(height: 14),
+                        Card(
+                          margin: EdgeInsets.zero,
+                          elevation: 0,
+                          color: c.accentBg,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(18),
+                            side: BorderSide(color: c.accentBorder),
+                          ),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 6,
+                            ),
+                            leading: UserAvatar(
+                              base64Image: admin.hinhanh,
+                              name: admin.hoten,
+                              radius: 24,
+                            ),
+                            title: const Text(
+                              'Quản trị viên',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            subtitle: Text(admin.email),
+                            trailing: Icon(
+                              Icons.arrow_forward_ios_rounded,
+                              size: 16,
+                              color: theme.colorScheme.primary,
+                            ),
+                            onTap: () => _showDetail(admin),
+                          ),
                         ),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 6,
-                          ),
-                          leading: UserAvatar(
-                            base64Image: admin.hinhanh,
-                            name: admin.hoten,
-                            radius: 24,
-                          ),
-                          title: const Text(
-                            'Quản trị viên',
-                            style: TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          subtitle: Text(admin.email),
-                          trailing: Icon(
-                            Icons.arrow_forward_ios_rounded,
-                            size: 16,
-                            color: theme.colorScheme.primary,
-                          ),
-                          onTap: () => _showDetail(admin),
+                      ],
+                      const SizedBox(height: 18),
+                      TextField(
+                        stylusHandwritingEnabled: false,
+                        keyboardType: TextInputType.text,
+                        decoration: const InputDecoration(
+                          hintText: 'Tìm theo tên hoặc email',
+                          prefixIcon: Icon(Icons.search_rounded),
                         ),
+                        onChanged: (v) =>
+                            setState(() => _keyword = v.toLowerCase()),
                       ),
                     ],
-                    const SizedBox(height: 18),
-                    TextField(
-                      decoration: const InputDecoration(
-                        hintText: 'Tìm theo tên hoặc email',
-                        prefixIcon: Icon(Icons.search_rounded),
-                      ),
-                      onChanged: (v) =>
-                          setState(() => _keyword = v.toLowerCase()),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
-              Expanded(
-                child: users.isEmpty
-                    ? Center(
-                        child: Text(
-                          _isAdmin
-                              ? 'Chưa có người dùng. Bấm "Thêm" để tạo mới.'
-                              : 'Chưa có người dùng.',
+                Expanded(
+                  child: users.isEmpty
+                      ? Center(
+                          child: Text(
+                            _isAdmin
+                                ? 'Chưa có người dùng. Bấm "Thêm" để tạo mới.'
+                                : 'Chưa có người dùng.',
+                          ),
+                        )
+                      : ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+                          itemCount: users.length,
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 10),
+                          itemBuilder: (_, i) =>
+                              _buildUserTile(users[i], theme, c),
                         ),
-                      )
-                    : ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-                        itemCount: users.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 10),
-                        itemBuilder: (_, i) {
-                          final u = users[i];
-                          return Card(
-                            margin: EdgeInsets.zero,
-                            elevation: 0,
-                            color: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(18),
-                              side: const BorderSide(color: Color(0xFFE9EDF5)),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUserTile(AppUser u, ThemeData theme, AppColors c) {
+    final selected = _selected.contains(u.id);
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      color: selected ? c.accentBg : c.card,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(
+          color: selected ? theme.colorScheme.primary : c.border,
+        ),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: UserAvatar(base64Image: u.hinhanh, name: u.hoten, radius: 25),
+        title: Text(
+          u.hoten,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(u.email),
+        ),
+        onTap: () => _selectMode ? _toggleSelect(u) : _showDetail(u),
+        // Nhấn giữ 1 dòng để bắt đầu chọn nhiều
+        onLongPress:
+            _isAdmin && !_selectMode ? () => _enterSelectMode(u) : null,
+        trailing: _selectMode
+            ? Checkbox(value: selected, onChanged: (_) => _toggleSelect(u))
+            : _isAdmin
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: 'Sửa',
+                        style: IconButton.styleFrom(
+                          foregroundColor: theme.colorScheme.primary,
+                        ),
+                        icon: const Icon(Icons.edit_outlined),
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => UserFormScreen(
+                              currentUser: widget.currentUser,
+                              user: u,
                             ),
-                            child: ListTile(
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 8,
-                              ),
-                              leading: UserAvatar(
-                                base64Image: u.hinhanh,
-                                name: u.hoten,
-                                radius: 25,
-                              ),
-                              title: Text(
-                                u.hoten,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              subtitle: Padding(
-                                padding: const EdgeInsets.only(top: 4),
-                                child: Text(u.email),
-                              ),
-                              onTap: () => _showDetail(u),
-                              trailing: _isAdmin
-                                  ? Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        IconButton(
-                                          tooltip: 'Sửa',
-                                          style: IconButton.styleFrom(
-                                            foregroundColor:
-                                                theme.colorScheme.primary,
-                                          ),
-                                          icon: const Icon(Icons.edit_outlined),
-                                          onPressed: () => Navigator.push(
-                                            context,
-                                            MaterialPageRoute(
-                                              builder: (_) => UserFormScreen(
-                                                currentUser: widget.currentUser,
-                                                user: u,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        IconButton(
-                                          tooltip: 'Xóa',
-                                          style: IconButton.styleFrom(
-                                            foregroundColor:
-                                                theme.colorScheme.error,
-                                          ),
-                                          icon: const Icon(
-                                            Icons.delete_outline,
-                                          ),
-                                          onPressed: () => _confirmDelete(u),
-                                        ),
-                                      ],
-                                    )
-                                  : null,
-                            ),
-                          );
-                        },
+                          ),
+                        ),
                       ),
-              ),
-            ],
-          );
-        },
+                      IconButton(
+                        tooltip: 'Xóa',
+                        style: IconButton.styleFrom(
+                          foregroundColor: theme.colorScheme.error,
+                        ),
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () => _confirmDelete(u),
+                      ),
+                    ],
+                  )
+                : null,
       ),
     );
   }

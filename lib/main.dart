@@ -1,65 +1,53 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
- 
+
 import 'firebase_options.dart'; // file này do lệnh `flutterfire configure` tự sinh
+import 'models/app_user.dart';
 import 'screens/login_screen.dart';
- 
+import 'screens/user_list_screen.dart';
+import 'services/local_prefs.dart';
+import 'services/user_service.dart';
+import 'theme/app_theme.dart';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  runApp(const MyApp());
+  await LocalPrefs.init();
+  themeModeNotifier.value = LocalPrefs.themeMode;
+
+  // Ghi nhớ đăng nhập: nếu máy đã lưu ID tài khoản thì vào thẳng danh sách.
+  AppUser? rememberedUser;
+  final savedId = LocalPrefs.rememberedUserId;
+  if (savedId != null) {
+    try {
+      rememberedUser = await UserService().getUserById(savedId);
+    } catch (_) {
+      rememberedUser = null; // lỗi mạng... thì cho đăng nhập lại
+    }
+    if (rememberedUser == null) await LocalPrefs.clearRememberedUser();
+  }
+
+  runApp(MyApp(rememberedUser: rememberedUser));
 }
- 
+
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
- 
+  final AppUser? rememberedUser;
+  const MyApp({super.key, this.rememberedUser});
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Quản lý người dùng',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4263EB),
-          brightness: Brightness.light,
-          surface: const Color(0xFFFFFFFF),
-        ),
-        scaffoldBackgroundColor: const Color(0xFFF5F7FC),
-        useMaterial3: true,
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFFF5F7FC),
-          surfaceTintColor: Colors.transparent,
-          elevation: 0,
-          centerTitle: false,
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: Colors.white,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: const BorderSide(color: Color(0xFFE5E9F2)),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: const BorderSide(color: Color(0xFFE5E9F2)),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: const BorderSide(color: Color(0xFF4263EB), width: 1.5),
-          ),
-        ),
-        filledButtonTheme: FilledButtonThemeData(
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(52),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            textStyle: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-        ),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeModeNotifier,
+      builder: (_, mode, _) => MaterialApp(
+        title: 'Quản lý người dùng',
+        debugShowCheckedModeBanner: false,
+        theme: buildTheme(Brightness.light),
+        darkTheme: buildTheme(Brightness.dark),
+        themeMode: mode,
+        home: rememberedUser != null
+            ? UserListScreen(currentUser: rememberedUser!)
+            : const LoginScreen(),
       ),
-      home: const LoginScreen(),
     );
   }
 }

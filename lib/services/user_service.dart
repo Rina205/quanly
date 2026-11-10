@@ -80,6 +80,46 @@ class UserService {
     await _col.doc(id).update(data);
   }
 
+  /// Người dùng tự đổi mật khẩu của chính mình: phải nhập đúng mật khẩu cũ.
+  /// Trả về false nếu mật khẩu hiện tại không đúng.
+  Future<bool> changeOwnPassword(
+    String id, {
+    required String matkhauCu,
+    required String matkhauMoi,
+  }) async {
+    final doc = await _col.doc(id).get();
+    if (!doc.exists) throw StateError('Không tìm thấy tài khoản');
+    if (AppUser.fromDoc(doc).matkhau != hashPassword(matkhauCu)) return false;
+    await _col.doc(id).update({'matkhau': hashPassword(matkhauMoi)});
+    return true;
+  }
+
+  /// Lấy 1 người dùng theo ID (dùng cho ghi nhớ đăng nhập). Không có thì trả null.
+  Future<AppUser?> getUserById(String id) async {
+    final doc = await _col.doc(id).get();
+    return doc.exists ? AppUser.fromDoc(doc) : null;
+  }
+
+  /// Xóa nhiều người dùng cùng lúc (1 lần ghi duy nhất bằng WriteBatch).
+  /// Bỏ qua tài khoản admin để an toàn.
+  Future<int> deleteUsers(List<String> ids, {required String actorEmail}) async {
+    _requireAdmin(actorEmail);
+    final batch = FirebaseFirestore.instance.batch();
+    var count = 0;
+    for (final id in ids) {
+      final doc = await _col.doc(id).get();
+      if (!doc.exists || AppUser.fromDoc(doc).isAdmin) continue;
+      batch.delete(doc.reference);
+      count++;
+    }
+    await batch.commit();
+    return count;
+  }
+
+  /// Người dùng tự đổi ảnh đại diện của chính mình (ảnh dạng base64).
+  Future<void> updateOwnAvatar(String id, String hinhanh) =>
+      _col.doc(id).update({'hinhanh': hinhanh});
+
   Future<void> deleteUser(String id, {required String actorEmail}) async {
     _requireAdmin(actorEmail);
     await _requireNotAdminTarget(id);

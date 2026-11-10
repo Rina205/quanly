@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../services/local_prefs.dart';
 import '../services/user_service.dart';
+import '../theme/app_theme.dart';
 import 'user_list_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -17,6 +19,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _service = UserService();
   bool _loading = false;
   bool _hidePass = true;
+  bool _remember = false;
 
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
@@ -29,6 +32,13 @@ class _LoginScreenState extends State<LoginScreen> {
           const SnackBar(content: Text('Email hoặc mật khẩu không đúng')),
         );
       } else {
+        // Chỉ lưu ID tài khoản trên máy (shared_preferences), không lưu mật khẩu.
+        if (_remember) {
+          await LocalPrefs.setRememberedUserId(user.id);
+        } else {
+          await LocalPrefs.clearRememberedUser();
+        }
+        if (!mounted) return;
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => UserListScreen(currentUser: user)),
@@ -47,7 +57,9 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final c = AppColors.of(context);
     return Scaffold(
+      appBar: AppBar(actions: const [ThemeToggleButton()]),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -56,9 +68,9 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Container(
               padding: const EdgeInsets.all(32),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: c.card,
                 borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: const Color(0xFFE9EDF5)),
+                border: Border.all(color: c.border),
                 boxShadow: const [
                   BoxShadow(
                     color: Color(0x0D243B73),
@@ -78,7 +90,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         width: 60,
                         height: 60,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFEEF1FF),
+                          color: c.accentBg,
                           borderRadius: BorderRadius.circular(19),
                         ),
                         child: Icon(Icons.admin_panel_settings_rounded,
@@ -90,21 +102,22 @@ class _LoginScreenState extends State<LoginScreen> {
                       'Chào mừng trở lại',
                       style: theme.textTheme.headlineSmall?.copyWith(
                         fontWeight: FontWeight.w700,
-                        color: const Color(0xFF202943),
+                        color: c.title,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       'Đăng nhập để tiếp tục quản lý người dùng.',
                       style: theme.textTheme.bodyMedium?.copyWith(
-                        color: const Color(0xFF78829A),
+                        color: c.muted,
                         height: 1.5,
                       ),
                     ),
                     const SizedBox(height: 28),
                     TextFormField(
+                      stylusHandwritingEnabled: false,
                       controller: _emailCtrl,
-                      keyboardType: TextInputType.emailAddress,
+                      keyboardType: TextInputType.text,
                       decoration: const InputDecoration(
                         labelText: 'Email',
                         prefixIcon: Icon(Icons.email_outlined),
@@ -115,6 +128,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
+                      stylusHandwritingEnabled: false,
                       controller: _passCtrl,
                       obscureText: _hidePass,
                       keyboardType: TextInputType.text,
@@ -135,7 +149,16 @@ class _LoginScreenState extends State<LoginScreen> {
                           (v == null || v.isEmpty) ? 'Nhập mật khẩu' : null,
                       onFieldSubmitted: (_) => _login(),
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 8),
+                    CheckboxListTile(
+                      value: _remember,
+                      onChanged: (v) => setState(() => _remember = v ?? false),
+                      title: const Text('Ghi nhớ đăng nhập'),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                    ),
+                    const SizedBox(height: 8),
                     FilledButton(
                       onPressed: _loading ? null : _login,
                       child: _loading
@@ -158,7 +181,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         Text(
                           'Khu vực quản trị an toàn',
                           style: theme.textTheme.labelMedium?.copyWith(
-                            color: const Color(0xFF78829A),
+                            color: c.muted,
                           ),
                         ),
                       ],

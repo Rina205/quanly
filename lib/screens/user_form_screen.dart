@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../models/app_user.dart';
 import '../services/user_service.dart';
+import '../theme/app_theme.dart';
 
 /// Dùng chung cho Thêm (user == null) và Sửa (user != null).
 class UserFormScreen extends StatefulWidget {
@@ -95,6 +96,7 @@ class _UserFormScreenState extends State<UserFormScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final c = AppColors.of(context);
     if (!widget.currentUser.isAdmin) {
       return Scaffold(
         appBar: AppBar(title: const Text('Không có quyền truy cập')),
@@ -132,23 +134,23 @@ class _UserFormScreenState extends State<UserFormScreen> {
                     _isEdit ? 'Cập nhật thông tin' : 'Tạo tài khoản mới',
                     style: theme.textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w700,
-                      color: const Color(0xFF202943),
+                      color: c.title,
                     ),
                   ),
                   const SizedBox(height: 6),
                   Text(
                     'Điền thông tin bên dưới để ${_isEdit ? 'cập nhật hồ sơ' : 'thêm người dùng vào hệ thống'}.',
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: const Color(0xFF78829A),
+                      color: c.muted,
                     ),
                   ),
                   const SizedBox(height: 24),
                   Container(
                     padding: const EdgeInsets.all(22),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: c.card,
                       borderRadius: BorderRadius.circular(22),
-                      border: Border.all(color: const Color(0xFFE9EDF5)),
+                      border: Border.all(color: c.border),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -156,7 +158,7 @@ class _UserFormScreenState extends State<UserFormScreen> {
                         Center(
                           child: CircleAvatar(
                             radius: 48,
-                            backgroundColor: const Color(0xFFEEF1FF),
+                            backgroundColor: c.accentBg,
                             backgroundImage: _imageBase64.isNotEmpty
                                 ? MemoryImage(base64Decode(_imageBase64))
                                 : null,
@@ -187,8 +189,9 @@ class _UserFormScreenState extends State<UserFormScreen> {
                         ),
                         const SizedBox(height: 26),
                         TextFormField(
+                          stylusHandwritingEnabled: false,
                           controller: _hotenCtrl,
-                          keyboardType: TextInputType.name,
+                          keyboardType: TextInputType.text,
                           textCapitalization: TextCapitalization.words,
                           decoration: const InputDecoration(
                             labelText: 'Họ tên',
@@ -200,8 +203,9 @@ class _UserFormScreenState extends State<UserFormScreen> {
                         ),
                         const SizedBox(height: 14),
                         TextFormField(
+                          stylusHandwritingEnabled: false,
                           controller: _emailCtrl,
-                          keyboardType: TextInputType.emailAddress,
+                          keyboardType: TextInputType.text,
                           decoration: const InputDecoration(
                             labelText: 'Email',
                             prefixIcon: Icon(Icons.email_outlined),
@@ -214,6 +218,7 @@ class _UserFormScreenState extends State<UserFormScreen> {
                         ),
                         const SizedBox(height: 14),
                         TextFormField(
+                          stylusHandwritingEnabled: false,
                           controller: _passCtrl,
                           obscureText: true,
                           decoration: InputDecoration(
